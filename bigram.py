@@ -2,74 +2,43 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-# 1. Finding unique characters for encoding
 
+# hyperparameters
+batch_size = 32 # how many chunks we will process at once
+chunk_size = 8 # max context length for predictions
+max_iters = 3000
+eval_interval = 300
+learning_rate = 1e-2
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+eval_iters = 200
+# -------------------------------------------------------
+
+# if you would like to replicate, here is the random generator setting
+torch.manual_seed(1337)
+
+# Data used
 with open('homer.txt', 'r', encoding='utf-8') as f:
     text = f.read()
-
-print("length of dataset: ", len(text))
-
-#Looking at first 1000 characters
-print(text[:1001])
 
 # unique characters that occur in text
 chars = sorted(list(set(text)))
 vocab_size = len(chars)
-print(''.join(chars))
-print(vocab_size)
-
-
-# 2. Tokenization: Encoding and Decoding Strategy
-'''I will be mapping characters to numbers and create functions to encode and decode. 
-I know their are other methods like Sentencepiece or a byte-pair tokenizer like tiktoken which openai uses 
-but I elected to code out instead of using libraries for learning/practice purposes.'''
-
 # Mapping
 encode_map = { ch:i for i,ch in enumerate(chars) }
 decode_map = { i:ch for i, ch in enumerate(chars) }
-
 #encoder takes string and maps to list of integers
 encode = lambda e: [encode_map[c] for c in e]
 #decode takes list of integers and outputs a string
 decode = lambda d: ''.join([decode_map[u] for u in d])
 
-print(encode("hellooo friend"))
-print(decode(encode("hellooo friend")))
-
 # encoding entire dataset using pytorch
 data = torch.tensor(encode(text), dtype=torch.long)
-print(data.shape, data.dtype)
-print(data[:1001]) #peek at first 1000 characters
 
-# # 3. Split into Train/Test
-# Splitting train/test, chunk definitions, and batching for multiple chunks at same time.
-
-#taking 90% of data for train, and rest for validation
-n = int(0.9*len(data))
+# Train/Test splits
+n = int(0.9*len(data)) # taking 90% of data for train, and rest for validation
 train_data = data[:n]
 val_data = data[n:]
-print(train_data)
-print(val_data)
 
-# will be training random chunks rather than every line for computation reasons
-chunk_size = 8
-train_data[:chunk_size+1]
-
-
-# Setting up next likely value logic and sanity checking
-
-x = train_data[:chunk_size]
-y = train_data[1:chunk_size+1]
-for i in range(chunk_size):
-    context = x[:i+1]
-    target = y[i]
-    print(f"When input is {context} the target is: {target}")
-
-
-# manual seed for random generator for this code if you would like to reproduce results
-#torch.manual_seed(1337)
-batch_size = 4 # how many chunks we will process at once
-chunk_size = 8 # max context length for predictions
 
 def get_batch(split):
     #generating a small batch of data of inputs x and targets y
@@ -79,38 +48,20 @@ def get_batch(split):
     y = torch.stack([data[i+1:i+chunk_size+1] for i in ix])
     return x,y
 
-x_batch, y_batch = get_batch('train')
-print('inputs:')
-print(x_batch.shape)
-print(x_batch)
-print('targets:')
-print(y_batch.shape)
-print(y_batch)
-
-print('----')
-
-for b in range(batch_size): # batch dimension
-    for t in range(chunk_size): # time dimension
-        context = x_batch[b, :t+1]
-        target = y_batch[b,t]
-        print(f"When input is {context.tolist()} the target is: {target}")
-
-
-# 4. Neural Network
-'''Now that the data is prepared into train/validatin sets and batching, randomized positioning has been defined, 
- and we have encoded those batches.I will now implement a neural network with the data.'''
-
-# Defining module for a simple Bigram Language Model
-
-'''
- 1. Creating token embedding tables for positional reference
- 2. Creating a embedding table for multidimensional tensor for token pairs (B,T,C)
- 3. Defining loss function (cross_entorpy) and making sure it aligns with expected loss (-ln(1/88)) -- 88 being the number of unique characters (vocab_size variable)
- 4. Generate function will get predictions, apply the softmax activation function to find probability most likely next character, 
- and append the character with the highest probability to the end of the running sequence.
- 
- Simple model and progress is made but will need to implement context and transformsers.'''
-#torch.manual_seed(1337)
+# telling pytorch to not do backpropagation for compute efficiency sake
+@torch.no_grad()
+def estimate_loss():
+    out = {}
+    model.eval()
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            X, Y = get_batch(split)
+            logits, loss = model(X,Y)
+            losses[k] = loss.item()
+        out[split] = losses.mean()
+    model.train()
+    return out
 
 class BigramLanguageModel(nn.Module):
 
@@ -150,32 +101,32 @@ class BigramLanguageModel(nn.Module):
         return idx
     
 model = BigramLanguageModel(vocab_size)
-logits, loss = m(x_batch, y_batch)
-print(logits.shape)
-print(loss)
-
-print(decode(model.generate(idx = torch.zeros((1,1), dtype=torch.long),max_new_tokens=100)[0].tolist()))
+m = model.to(device)
 
 # First run of model was random and ununiformed, which is expected as it is random -- training is yet to be done
 
 # Optimizer - using Adam and using higher learning rate because of smaller sample data
-optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
-batch_size = 32
+optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
-for steps in range(10000):
-    #sample batch
-    x_batch,y_batch = get_batch('train')
+for iter in range(max_iters):
+    # setting cadence of when to eval the loss on train and val sets
+    if iter % eval_interval == 0:
+        losses = estimate_loss()
+        print(f"Step {iter}: train_loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+    
+    # sample batch of data
+    x_batch, y_batch = get_batch('train')
 
-    #eval loss
-    logits, loss = model(x_batch,y_batch)
+    # eval loss
+    logits, loss = model(x_batch, y_batch)
     optimizer.zero_grad(set_to_none=True)
     loss.backward()
     optimizer.step()
 
-print(loss.item())
 
-# Model results after optimizing -- progress but still needs work.
-print(decode(model.generate(idx = torch.zeros((1,1), dtype=torch.long),max_new_tokens=100)[0].tolist()))
+# generate from the model
+context = torch.zeros((1,1), dtype=torch.long, device=device)
+print(decode(m.generate(idx = torch.zeros((1,1), dtype=torch.long),max_new_tokens=100)[0].tolist()))
 
 
 
