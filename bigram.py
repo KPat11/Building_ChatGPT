@@ -82,7 +82,6 @@ class BigramLanguageModel(nn.Module):
             targets = targets.view(B*T)
             # loss definition will be cross entropy
             loss = F.cross_entropy(logits, targets) # expecting loss of 4.477368 (-ln(1/88))
-
         return logits, loss
     
     def generate(self, idx, max_new_tokens):
