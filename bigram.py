@@ -156,15 +156,7 @@ print(loss)
 
 print(decode(model.generate(idx = torch.zeros((1,1), dtype=torch.long),max_new_tokens=100)[0].tolist()))
 
-''' First run of model: 
- torch.Size([32, 88])
- tensor(4.9037, grad_fn=<NllLossBackward0>)
- 
- 7-OW rt—60uL(EQzCcrraUtm(hTpb#GQ%Kgbq#﻿3BA9•AkGgcBP-RdK
- r“5Oyf(W?C;K/keSI
- 0yPtYbJ’”8zCz#UJ(:,J5••AZR '''
-
-# Which is expected as it is random -- training is yet to be done
+# First run of model was random and ununiformed, which is expected as it is random -- training is yet to be done
 
 # Optimizer - using Adam and using higher learning rate because of smaller sample data
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
